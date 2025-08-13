@@ -1,0 +1,9 @@
+ultralytics==8.3.56
+opencv-python>=4.9.0
+numpy>=1.25
+scipy>=1.11
+scikit-image>=0.21
+filterpy>=1.4.5
+tqdm>=4.66
+pydantic>=2.7
+matplotlib>=3.8
