@@ -144,9 +144,6 @@ class AdvancedAugmentation:
         # Apply same geometric transform to all frames in sequence
         augmented_frames = []
         
-        # Get random transform parameters (consistent across frames)
-        transform = self.geometric_aug.get_transform_init_args_names()
-        
         for frame in frames:
             try:
                 augmented = self.geometric_aug(image=frame)['image']
