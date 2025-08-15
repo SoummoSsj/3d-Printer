@@ -880,6 +880,13 @@ def train_proper_speednet():
     model = ProperUniversalSpeedNet(sequence_length=6).to(device)
     print(f"🧠 Model parameters: {sum(p.numel() for p in model.parameters()):,}")
     
+    # Verify model is on GPU
+    print(f"🔍 Model device: {next(model.parameters()).device}")
+    print(f"🔍 GPU available: {torch.cuda.is_available()}")
+    if torch.cuda.is_available():
+        print(f"🔍 GPU name: {torch.cuda.get_device_name()}")
+        print(f"🔍 GPU memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
+    
     # Training setup
     criterion = EnhancedPhysicsInformedLoss()
     optimizer = torch.optim.AdamW(model.parameters(), lr=5e-5, weight_decay=1e-4)  # Lower LR for stability
@@ -921,13 +928,18 @@ def train_proper_speednet():
         train_loss = 0
         
         for batch in tqdm(train_loader, desc="🔥 Training"):
-            frames = batch['frames'].to(device)
-            speeds = batch['speed'].to(device) 
-            durations = batch['duration'].to(device)
+            frames = batch['frames']  # Move to GPU inside autocast
+            speeds = batch['speed']   # Move to GPU inside autocast
+            durations = batch['duration']  # Move to GPU inside autocast
             
             optimizer.zero_grad()
             
             with autocast('cuda'):
+                # Ensure everything is on GPU
+                frames = frames.to(device, non_blocking=True)
+                speeds = speeds.to(device, non_blocking=True) 
+                durations = durations.to(device, non_blocking=True)
+                
                 predictions = model(frames)
                 losses = criterion(predictions, speeds, durations)
                 loss = losses['total_loss']
@@ -950,10 +962,12 @@ def train_proper_speednet():
         
         with torch.no_grad():
             for batch in tqdm(val_loader, desc="📊 Validation"):
-                frames = batch['frames'].to(device)
-                speeds = batch['speed'].to(device)
+                frames = batch['frames']
+                speeds = batch['speed']
                 
                 with autocast('cuda'):
+                    frames = frames.to(device, non_blocking=True)
+                    speeds = speeds.to(device, non_blocking=True)
                     predictions = model(frames)
                 
                 val_predictions.extend(predictions['speed'].cpu().numpy())
