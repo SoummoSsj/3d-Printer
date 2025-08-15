@@ -507,7 +507,7 @@ def train_with_domain_adaptation_checkpointed(model, train_loader, val_loader, e
             scaler.update()
             
             train_loss += total_loss.item()
-            train_pbar.set_postfix({'loss': total_loss.item():.4f})
+            train_pbar.set_postfix({'loss': f'{total_loss.item():.4f}'})
         
         avg_train_loss = train_loss / len(train_loader)
         train_losses.append(avg_train_loss)
