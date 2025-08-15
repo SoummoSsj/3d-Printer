@@ -12,7 +12,7 @@ import pickle
 import cv2
 import numpy as np
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Tuple, Optional, Any
 from dataclasses import dataclass
 
@@ -31,10 +31,14 @@ from filterpy.kalman import KalmanFilter
 os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+# Session management for Kaggle
+KAGGLE_SESSION_START = datetime.now()
+
 print("🚗 Real-World SpeedNet: Physics-Based Vehicle Speed Estimation")
 print("🌍 Works anywhere with automatic calibration and proper motion analysis")
 print("=" * 80)
 print(f"✅ Device: {device}")
+print(f"⏰ Session started: {KAGGLE_SESSION_START.strftime('%H:%M:%S')}")
 
 @dataclass
 class VehicleDetection:
@@ -744,8 +748,87 @@ class PhysicsInformedLoss(nn.Module):
             'uncertainty_reg': uncertainty_reg
         }
 
+def load_checkpoint_realworld(checkpoint_path, model, optimizer, scheduler, scaler):
+    """Load checkpoint for real-world training"""
+    if not os.path.exists(checkpoint_path):
+        print(f"🆕 No checkpoint found at {checkpoint_path}")
+        return 0, [], []
+    
+    try:
+        # Fix for PyTorch 2.6
+        try:
+            checkpoint = torch.load(checkpoint_path, weights_only=True)
+        except:
+            checkpoint = torch.load(checkpoint_path, weights_only=False)
+        
+        # Load model state
+        model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        scaler.load_state_dict(checkpoint['scaler_state_dict'])
+        
+        start_epoch = checkpoint['epoch'] + 1
+        train_losses = checkpoint.get('train_losses', [])
+        val_losses = checkpoint.get('val_losses', [])
+        
+        print(f"✅ Resumed from epoch {start_epoch}")
+        print(f"   Previous loss: {train_losses[-1] if train_losses else 'N/A'}")
+        
+        return start_epoch, train_losses, val_losses
+        
+    except Exception as e:
+        print(f"❌ Checkpoint load failed: {e}")
+        return 0, [], []
+
+def save_checkpoint_realworld(epoch, model, optimizer, scheduler, scaler, 
+                            train_losses, val_losses, is_best=False):
+    """Save comprehensive checkpoint"""
+    checkpoint = {
+        'epoch': epoch,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'scheduler_state_dict': scheduler.state_dict(),
+        'scaler_state_dict': scaler.state_dict(),
+        'train_losses': train_losses,
+        'val_losses': val_losses,
+        'timestamp': str(datetime.now()),
+        'pytorch_version': torch.__version__
+    }
+    
+    # Save to multiple locations for safety
+    checkpoint_path = '/kaggle/working/realworld_speednet_latest.pth'
+    backup_path = f'/kaggle/working/realworld_speednet_epoch_{epoch}.pth'
+    
+    try:
+        torch.save(checkpoint, checkpoint_path, weights_only=False)
+        torch.save(checkpoint, backup_path, weights_only=False)
+        
+        if is_best:
+            best_path = '/kaggle/working/realworld_speednet_best.pth'
+            torch.save(checkpoint, best_path, weights_only=False)
+            print(f"🏆 Best model saved! Epoch {epoch}")
+        
+        print(f"✅ Checkpoint saved: epoch {epoch}")
+        return True
+    except Exception as e:
+        print(f"❌ Checkpoint save failed: {e}")
+        return False
+
+def get_time_remaining_realworld():
+    """Get remaining time in Kaggle session"""
+    global KAGGLE_SESSION_START
+    elapsed = datetime.now() - KAGGLE_SESSION_START
+    remaining = timedelta(hours=11.5) - elapsed  # 11.5h buffer
+    return remaining.total_seconds() / 3600
+
+def should_continue_training_realworld():
+    """Check if we should continue training"""
+    remaining_hours = get_time_remaining_realworld()
+    print(f"⏰ Kaggle session time remaining: {remaining_hours:.1f} hours")
+    return remaining_hours > 0.5  # Stop with 30min buffer
+
 def train_realworld_speednet():
-    """Training pipeline for real-world speed estimation"""
+    """Training pipeline for real-world speed estimation with checkpointing"""
     
     # Dataset
     dataset_root = "/kaggle/input/brnocomp/brno_kaggle_subset/dataset"
@@ -761,13 +844,31 @@ def train_realworld_speednet():
     scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=10)
     scaler = GradScaler()
     
-    # Training loop
+    # Try to resume from checkpoint
+    start_epoch, train_losses, val_losses = load_checkpoint_realworld(
+        '/kaggle/working/realworld_speednet_latest.pth', 
+        model, optimizer, scheduler, scaler
+    )
+    
+    best_loss = min(train_losses) if train_losses else float('inf')
+    
+    # Training loop with checkpointing
     model.train()
-    for epoch in range(50):
+    for epoch in range(start_epoch, 50):
+        # Check time remaining (Kaggle session management)
+        if not should_continue_training_realworld():
+            print(f"⏰ Time limit approaching! Saving checkpoint and exiting...")
+            save_checkpoint_realworld(epoch-1, model, optimizer, scheduler, scaler,
+                                    train_losses, val_losses)
+            return
+        
+        print(f"\n📅 Epoch {epoch+1}/50")
+        
         total_loss = 0
         train_loader = DataLoader(train_dataset, batch_size=4, shuffle=True, num_workers=0)
         
-        for batch in train_loader:
+        from tqdm import tqdm
+        for batch in tqdm(train_loader, desc="🔥 Training"):
             frames = batch['frames'].to(device)
             speeds = batch['speed'].to(device)
             
@@ -788,15 +889,24 @@ def train_realworld_speednet():
         
         scheduler.step()
         avg_loss = total_loss / len(train_loader)
-        print(f"Epoch {epoch+1}: Loss = {avg_loss:.4f}")
+        train_losses.append(avg_loss)
         
-        # Save checkpoint
-        if (epoch + 1) % 10 == 0:
-            torch.save({
-                'model_state_dict': model.state_dict(),
-                'epoch': epoch,
-                'loss': avg_loss
-            }, f'/kaggle/working/realworld_speednet_epoch_{epoch+1}.pth')
+        print(f"📈 Epoch {epoch+1} Results:")
+        print(f"  Train Loss: {avg_loss:.4f}")
+        print(f"  LR: {optimizer.param_groups[0]['lr']:.2e}")
+        print(f"  GPU memory: {torch.cuda.memory_allocated()/1e9:.2f} GB")
+        
+        # Check if best model
+        is_best = avg_loss < best_loss
+        if is_best:
+            best_loss = avg_loss
+        
+        # Save checkpoint every epoch (aggressive checkpointing)
+        save_checkpoint_realworld(epoch, model, optimizer, scheduler, scaler,
+                                train_losses, val_losses, is_best)
+        
+        # Clear GPU cache
+        torch.cuda.empty_cache()
 
 class RealTimeSpeedDetector:
     """Real-time speed detection system"""
