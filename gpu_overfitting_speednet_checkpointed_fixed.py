@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-🚗 GPU + Anti-Overfitting SpeedNet WITH CHECKPOINTING
+🚗 GPU + Anti-Overfitting SpeedNet WITH CHECKPOINTING (FIXED)
 🛡️ Handles GPU issues AND 2-road overfitting AND Kaggle resets
 ============================================================
 """
@@ -31,7 +31,7 @@ os.environ['CUDA_DEVICE_ORDER'] = 'PCI_BUS_ID'
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 assert torch.cuda.is_available(), "❌ CUDA not available! Enable GPU in Kaggle settings"
 
-print("🚗 GPU + Anti-Overfitting SpeedNet WITH CHECKPOINTING")
+print("🚗 GPU + Anti-Overfitting SpeedNet WITH CHECKPOINTING (FIXED)")
 print("🛡️ Handles GPU issues AND 2-road overfitting AND Kaggle resets")
 print("=" * 60)
 print(f"✅ GPU WORKING: {device}")
@@ -133,21 +133,24 @@ def simple_augment_frame(frame):
     return frame
 
 class AntiOverfittingDataset(Dataset):
-    def __init__(self, dataset_root, split='train', use_augmentation=True):
+    def __init__(self, dataset_root, split='train', use_augmentation=True, samples=None, silent=False):
         self.dataset_root = Path(dataset_root)
         self.split = split
         self.use_augmentation = use_augmentation and (split == 'train')
         self.sequence_length = 6
         self.image_size = (160, 160)
+        self.silent = silent
         
-        self.samples = []
-        if split == 'full':
+        self.samples = samples or []
+        
+        if split == 'full' and samples is None:
             self._collect_samples()
         
-        self._update_session_counts()
+        if not self.silent:
+            self._print_info()
     
-    def _update_session_counts(self):
-        """Update session counts and print info"""
+    def _print_info(self):
+        """Print dataset info"""
         print(f"✅ {self.split} dataset: {len(self.samples)} samples")
         
         # Track session distribution for domain adaptation
@@ -159,20 +162,23 @@ class AntiOverfittingDataset(Dataset):
     
     def _collect_samples(self):
         """Collect all valid samples from dataset"""
-        print("📁 Loading full dataset...")
+        if not self.silent:
+            print("📁 Loading full dataset...")
         
         for session_dir in sorted(self.dataset_root.iterdir()):
             if not session_dir.is_dir():
                 continue
                 
             session_name = session_dir.name
-            print(f"📊 {session_name}: ", end="")
+            if not self.silent:
+                print(f"📊 {session_name}: ", end="")
             
             gt_path = session_dir / "gt_data.pkl"
             video_path = session_dir / "video.avi"
             
             if not gt_path.exists() or not video_path.exists():
-                print("❌ Missing files")
+                if not self.silent:
+                    print("❌ Missing files")
                 continue
             
             try:
@@ -188,7 +194,8 @@ class AntiOverfittingDataset(Dataset):
                 valid_cars = [car for car in cars if car.get('valid', False) and 
                             len(car.get('intersections', [])) >= 2]
                 
-                print(f"{len(valid_cars)} cars")
+                if not self.silent:
+                    print(f"{len(valid_cars)} cars")
                 
                 # Add samples with session tracking
                 for car in valid_cars:
@@ -215,7 +222,8 @@ class AntiOverfittingDataset(Dataset):
                         })
                         
             except Exception as e:
-                print(f"❌ Error: {e}")
+                if not self.silent:
+                    print(f"❌ Error: {e}")
                 continue
     
     def __len__(self):
@@ -635,18 +643,27 @@ def main():
         print(f"\n🧪 Testing {split_name} ({i+1}/3)")
         print("=" * 60)
         
-        # Create datasets with pre-assigned samples
-        train_dataset = AntiOverfittingDataset(dataset_root, 'train', use_augmentation=True)
-        train_dataset.samples = train_samples
-        train_dataset._update_session_counts()  # Update counts after assignment
+        # Create datasets with proper sample assignment
+        print(f"📊 Creating {split_name} datasets...")
+        train_dataset = AntiOverfittingDataset(dataset_root, 'train', use_augmentation=True, 
+                                             samples=train_samples, silent=True)
+        val_dataset = AntiOverfittingDataset(dataset_root, 'val', use_augmentation=False, 
+                                           samples=val_samples, silent=True)
         
-        val_dataset = AntiOverfittingDataset(dataset_root, 'val', use_augmentation=False)
-        val_dataset.samples = val_samples
-        val_dataset._update_session_counts()  # Update counts after assignment
+        # Now print the info
+        print(f"✅ Training dataset: {len(train_dataset)} samples")
+        train_session_counts = {}
+        for sample in train_samples:
+            session = sample['session_id']
+            train_session_counts[session] = train_session_counts.get(session, 0) + 1
+        print(f"📊 Training session distribution: {train_session_counts}")
         
-        print(f"📊 Split info:")
-        print(f"  Training: {len(train_dataset)} samples")
-        print(f"  Validation: {len(val_dataset)} samples")
+        print(f"✅ Validation dataset: {len(val_dataset)} samples")
+        val_session_counts = {}
+        for sample in val_samples:
+            session = sample['session_id']
+            val_session_counts[session] = val_session_counts.get(session, 0) + 1
+        print(f"📊 Validation session distribution: {val_session_counts}")
         
         # Data loaders
         train_loader = DataLoader(
