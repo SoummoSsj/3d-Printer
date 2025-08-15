@@ -113,7 +113,7 @@ class MultiHeadSpatialAttention(nn.Module):
         self.out_proj = nn.Linear(embed_dim, embed_dim)
         
         # Position encoding for spatial locations
-        self.pos_encoding = nn.Parameter(torch.randn(100, embed_dim))  # Max 10x10=100 positions
+        self.register_parameter('pos_encoding', nn.Parameter(torch.randn(100, embed_dim)))  # Max 10x10=100 positions
         
         self.dropout = nn.Dropout(dropout)
         self.scale = math.sqrt(self.head_dim)
@@ -184,7 +184,7 @@ class CrossFrameAttention(nn.Module):
         self.out_proj = nn.Linear(embed_dim, embed_dim)
         
         # Temporal position encoding
-        self.temporal_pos = nn.Parameter(torch.randn(sequence_length, embed_dim))
+        self.register_parameter('temporal_pos', nn.Parameter(torch.randn(sequence_length, embed_dim)))
         
         self.dropout = nn.Dropout(0.1)
         self.scale = math.sqrt(self.head_dim)
@@ -220,7 +220,7 @@ class CrossFrameAttention(nn.Module):
         attention_scores = torch.matmul(Q, K.transpose(-2, -1)) / self.scale
         
         # CAUSAL MASK: Frame t can only attend to frames ≤ t (physics-correct!)
-        causal_mask = torch.triu(torch.ones(seq_len, seq_len, device=attention_scores.device), diagonal=1)
+        causal_mask = torch.triu(torch.ones(seq_len, seq_len, device=attention_scores.device, dtype=attention_scores.dtype), diagonal=1)
         causal_mask = causal_mask.masked_fill(causal_mask == 1, float('-inf'))
         attention_scores = attention_scores + causal_mask.unsqueeze(0).unsqueeze(0)  # [batch, heads, seq, seq]
         
@@ -909,9 +909,9 @@ def train_proper_speednet():
         'rnn_layers': 5  # 3 GRU + 2 LSTM
     }
     
-    # Data loaders
-    train_loader = DataLoader(train_dataset, batch_size=6, shuffle=True, num_workers=0, pin_memory=True)
-    val_loader = DataLoader(val_dataset, batch_size=6, shuffle=False, num_workers=0, pin_memory=True)
+    # Data loaders - FORCE GPU USAGE
+    train_loader = DataLoader(train_dataset, batch_size=4, shuffle=True, num_workers=0, pin_memory=False)  # Smaller batch, no pin_memory
+    val_loader = DataLoader(val_dataset, batch_size=4, shuffle=False, num_workers=0, pin_memory=False)
     
     # Training loop
     for epoch in range(start_epoch, 50):
@@ -934,12 +934,12 @@ def train_proper_speednet():
             
             optimizer.zero_grad()
             
+            # FORCE GPU COMPUTATION
+            frames = frames.to(device, dtype=torch.float32)
+            speeds = speeds.to(device, dtype=torch.float32) 
+            durations = durations.to(device, dtype=torch.float32)
+            
             with autocast('cuda'):
-                # Ensure everything is on GPU
-                frames = frames.to(device, non_blocking=True)
-                speeds = speeds.to(device, non_blocking=True) 
-                durations = durations.to(device, non_blocking=True)
-                
                 predictions = model(frames)
                 losses = criterion(predictions, speeds, durations)
                 loss = losses['total_loss']
@@ -965,9 +965,11 @@ def train_proper_speednet():
                 frames = batch['frames']
                 speeds = batch['speed']
                 
+                # FORCE GPU COMPUTATION  
+                frames = frames.to(device, dtype=torch.float32)
+                speeds = speeds.to(device, dtype=torch.float32)
+                
                 with autocast('cuda'):
-                    frames = frames.to(device, non_blocking=True)
-                    speeds = speeds.to(device, non_blocking=True)
                     predictions = model(frames)
                 
                 val_predictions.extend(predictions['speed'].cpu().numpy())
