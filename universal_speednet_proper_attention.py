@@ -130,7 +130,7 @@ class MultiHeadSpatialAttention(nn.Module):
         seq_len = height * width
         
         # Flatten spatial dimensions: [batch, embed_dim, H*W] -> [batch, H*W, embed_dim]
-        x_flat = x.view(batch_size, embed_dim, seq_len).transpose(1, 2)
+        x_flat = x.reshape(batch_size, embed_dim, seq_len).transpose(1, 2)
         
         # Add positional encoding
         pos_enc = self.pos_encoding[:seq_len].unsqueeze(0).expand(batch_size, -1, -1)
@@ -161,7 +161,7 @@ class MultiHeadSpatialAttention(nn.Module):
         output = self.out_proj(attended)
         
         # Reshape back to spatial: [batch, H*W, embed_dim] -> [batch, embed_dim, H, W]
-        output = output.transpose(1, 2).view(batch_size, embed_dim, height, width)
+        output = output.transpose(1, 2).reshape(batch_size, embed_dim, height, width)
         
         return output, attention_weights
 
@@ -200,8 +200,8 @@ class CrossFrameAttention(nn.Module):
         batch_size, seq_len, embed_dim, height, width = frame_features.shape
         
         # Global average pooling for each frame: [batch, seq_len, embed_dim]
-        frame_global = F.adaptive_avg_pool2d(frame_features.view(-1, embed_dim, height, width), (1, 1))
-        frame_global = frame_global.view(batch_size, seq_len, embed_dim)
+        frame_global = F.adaptive_avg_pool2d(frame_features.reshape(-1, embed_dim, height, width), (1, 1))
+        frame_global = frame_global.reshape(batch_size, seq_len, embed_dim)
         
         # Add temporal position encoding
         frame_global = frame_global + self.temporal_pos.unsqueeze(0)
@@ -402,7 +402,7 @@ class EnhancedTemporalAnalyzer(nn.Module):
         attended_features, temporal_attention = self.cross_frame_attention(feature_sequence)
         
         # STEP 2: Flatten for RNN processing
-        features_flat = attended_features.view(batch_size, seq_len, -1)
+        features_flat = attended_features.reshape(batch_size, seq_len, -1)
         
         # STEP 3: Enhanced GRU processing
         gru_out, _ = self.motion_gru(features_flat)
