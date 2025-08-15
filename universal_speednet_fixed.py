@@ -3,6 +3,7 @@
 🌍 Universal SpeedNet: Physics-Informed Learning for Real-World Deployment
 🎯 Trains on BrnCompSpeed dataset, deploys anywhere in the world
 ===============================================================================
+FIXED VERSION - Compatible with all PyTorch versions
 """
 
 import os
@@ -557,7 +558,7 @@ class PhysicsInformedLoss(nn.Module):
             'duration_consistency': duration_consistency
         }
 
-# Checkpointing functions
+# Checkpointing functions (FIXED - no weights_only parameter)
 def save_checkpoint(epoch, model, optimizer, scheduler, scaler, 
                    train_losses, val_losses, best_mae, config):
     """Save comprehensive checkpoint"""
