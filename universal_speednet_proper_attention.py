@@ -34,7 +34,7 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 KAGGLE_SESSION_START = datetime.now()
 
 print("🌍 Universal SpeedNet: PROPER Physics-Informed Learning with Real Attention")
-print("🎯 TRUE multi-head attention + cross-frame attention + enhanced RNN")
+print("🎯 TRUE multi-head attention + CAUSAL cross-frame attention + enhanced RNN")
 print("=" * 80)
 print(f"✅ Device: {device}")
 print(f"⏰ Session started: {KAGGLE_SESSION_START.strftime('%H:%M:%S')}")
@@ -166,7 +166,7 @@ class MultiHeadSpatialAttention(nn.Module):
         return output, attention_weights
 
 class CrossFrameAttention(nn.Module):
-    """Cross-Frame Attention for temporal relationships between frames"""
+    """CAUSAL Cross-Frame Attention for physically realistic temporal relationships"""
     
     def __init__(self, embed_dim=256, num_heads=8, sequence_length=6):
         super().__init__()
@@ -218,6 +218,12 @@ class CrossFrameAttention(nn.Module):
         
         # Temporal attention scores
         attention_scores = torch.matmul(Q, K.transpose(-2, -1)) / self.scale
+        
+        # CAUSAL MASK: Frame t can only attend to frames ≤ t (physics-correct!)
+        causal_mask = torch.triu(torch.ones(seq_len, seq_len, device=attention_scores.device), diagonal=1)
+        causal_mask = causal_mask.masked_fill(causal_mask == 1, float('-inf'))
+        attention_scores = attention_scores + causal_mask.unsqueeze(0).unsqueeze(0)  # [batch, heads, seq, seq]
+        
         temporal_attention = F.softmax(attention_scores, dim=-1)
         temporal_attention = self.dropout(temporal_attention)
         
@@ -849,7 +855,7 @@ def train_proper_speednet():
     print("\n🚀 Starting PROPER Universal SpeedNet Training")
     print("🔧 Features:")
     print("  ✅ Multi-Head Self-Attention (spatial)")
-    print("  ✅ Cross-Frame Attention (temporal)")
+    print("  ✅ CAUSAL Cross-Frame Attention (temporal - physics correct!)")
     print("  ✅ Enhanced GRU + LSTM (temporal modeling)")
     print("  ✅ Velocity + Acceleration estimation")
     print("  ✅ Physics-informed loss with kinematics")
@@ -994,21 +1000,22 @@ def main():
     
     print("\n🎯 PROPER Universal SpeedNet Features:")
     print("  • Multi-Head Self-Attention for spatial regions")
-    print("  • Cross-Frame Attention for temporal relationships")
+    print("  • CAUSAL Cross-Frame Attention for physics-correct temporal relationships")
     print("  • Enhanced GRU + LSTM for motion modeling")
     print("  • Velocity & acceleration estimation")
     print("  • Physics-informed loss with kinematics")
-    print("  • TRUE frame-to-frame relationship modeling")
+    print("  • TRUE frame-to-frame relationship modeling (no future information!)")
     
     train_proper_speednet()
     
     print("\n✅ PROPER Universal SpeedNet Training Complete!")
     print("\n🧠 This model ACTUALLY captures physics through:")
     print("  • REAL multi-head attention (not sigmoid)")
-    print("  • Cross-frame temporal attention")
+    print("  • CAUSAL cross-frame temporal attention (no future cheating!)")
     print("  • Enhanced RNN family (GRU + LSTM)")
     print("  • Velocity and acceleration physics")
     print("  • Kinematics-consistent loss function")
+    print("  • Physics-correct causality: frame t only sees frames ≤ t")
 
 if __name__ == "__main__":
     main()
