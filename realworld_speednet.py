@@ -64,7 +64,11 @@ class VanishingPointDetector:
     """Automatic vanishing point detection from road scenes"""
     
     def __init__(self):
-        self.line_detector = cv2.createLineSegmentDetector()
+        # OpenCV 4.x compatible line detector
+        try:
+            self.line_detector = cv2.createLineSegmentDetector()
+        except:
+            self.line_detector = None
     
     def detect_vanishing_point(self, frame: np.ndarray) -> Tuple[float, float, float]:
         """Detect vanishing point using lane lines and perspective"""
@@ -78,7 +82,22 @@ class VanishingPointDetector:
         edges = cv2.bitwise_or(edges1, edges2)
         
         # Detect lines using multiple methods
-        lines_lsd = self.line_detector.detectLines(gray)[0] if self.line_detector.detectLines(gray)[0] is not None else []
+        lines_lsd = []
+        if self.line_detector is not None:
+            try:
+                # Try new OpenCV API
+                lsd_result = self.line_detector.detect(gray)
+                if lsd_result is not None and len(lsd_result) > 0:
+                    lines_lsd = lsd_result[0] if lsd_result[0] is not None else []
+            except AttributeError:
+                try:
+                    # Try old OpenCV API
+                    lsd_result = self.line_detector.detectLines(gray)
+                    if lsd_result is not None and len(lsd_result) > 0:
+                        lines_lsd = lsd_result[0] if lsd_result[0] is not None else []
+                except:
+                    lines_lsd = []
+        
         lines_hough = cv2.HoughLinesP(edges, 1, np.pi/180, threshold=50, minLineLength=50, maxLineGap=10)
         
         all_lines = []
@@ -86,8 +105,15 @@ class VanishingPointDetector:
         # Process LSD lines
         if len(lines_lsd) > 0:
             for line in lines_lsd:
-                x1, y1, x2, y2 = line[0].astype(int)
-                all_lines.append((x1, y1, x2, y2))
+                try:
+                    if len(line) >= 4:
+                        x1, y1, x2, y2 = line[:4].astype(int)
+                        all_lines.append((x1, y1, x2, y2))
+                    elif hasattr(line, '__len__') and len(line) > 0:
+                        x1, y1, x2, y2 = line[0][:4].astype(int)
+                        all_lines.append((x1, y1, x2, y2))
+                except:
+                    continue
         
         # Process Hough lines
         if lines_hough is not None:
@@ -98,6 +124,7 @@ class VanishingPointDetector:
         if len(all_lines) < 3:
             # Fallback: assume vanishing point at image center-top
             h, w = frame.shape[:2]
+            print(f"⚠️ Few lines detected ({len(all_lines)}), using fallback vanishing point")
             return w/2, h*0.3, 0.3
         
         # Find vanishing point using line intersections
@@ -115,6 +142,7 @@ class VanishingPointDetector:
         
         if len(intersection_points) < 3:
             h, w = frame.shape[:2]
+            print(f"⚠️ Few intersection points ({len(intersection_points)}), using fallback vanishing point")
             return w/2, h*0.3, 0.3
         
         # Cluster intersection points to find dominant vanishing point
@@ -623,26 +651,72 @@ class RealWorldDataset(Dataset):
     def _auto_calibrate(self) -> CameraCalibration:
         """Auto-calibrate camera from first video"""
         if len(self.samples) == 0:
-            return None
+            return self._create_default_calibration()
         
         # Load frames from first video for calibration
         video_path = self.samples[0]['video_path']
-        cap = cv2.VideoCapture(video_path)
         
-        frames = []
-        for i in range(0, 100, 10):  # Sample 10 frames
-            cap.set(cv2.CAP_PROP_POS_FRAMES, i)
-            ret, frame = cap.read()
-            if ret:
-                frames.append(frame)
+        try:
+            cap = cv2.VideoCapture(video_path)
+            
+            frames = []
+            for i in range(0, 100, 10):  # Sample 10 frames
+                cap.set(cv2.CAP_PROP_POS_FRAMES, i)
+                ret, frame = cap.read()
+                if ret:
+                    frames.append(frame)
+            
+            cap.release()
+            
+            if len(frames) > 0:
+                calibrator = AutomaticCameraCalibrator()
+                calibration = calibrator.calibrate_from_video(frames)
+                
+                if calibration is not None and calibration.confidence > 0.2:
+                    print(f"✅ Auto-calibration successful (confidence: {calibration.confidence:.2f})")
+                    return calibration
+                else:
+                    print(f"⚠️ Auto-calibration low confidence, using defaults")
+                    return self._create_default_calibration()
+            
+        except Exception as e:
+            print(f"⚠️ Auto-calibration failed: {e}")
+            return self._create_default_calibration()
         
-        cap.release()
+        return self._create_default_calibration()
+    
+    def _create_default_calibration(self) -> CameraCalibration:
+        """Create default calibration for when auto-calibration fails"""
+        print("📐 Using default camera calibration")
         
-        if len(frames) > 0:
-            calibrator = AutomaticCameraCalibrator()
-            return calibrator.calibrate_from_video(frames)
+        # Default values for typical traffic camera
+        h, w = 480, 640  # Typical video resolution
         
-        return None
+        # Default homography (identity-like transformation)
+        src_points = np.float32([
+            [w*0.2, h*0.9],    # Bottom left
+            [w*0.8, h*0.9],    # Bottom right  
+            [w*0.4, h*0.4],    # Top left
+            [w*0.6, h*0.4]     # Top right
+        ])
+        
+        dst_points = np.float32([
+            [100, 400],   # Bottom left
+            [300, 400],   # Bottom right
+            [150, 100],   # Top left  
+            [250, 100]    # Top right
+        ])
+        
+        homography = cv2.getPerspectiveTransform(src_points, dst_points)
+        
+        return CameraCalibration(
+            homography=homography,
+            vanishing_point=(w/2, h*0.3),
+            horizon_line=h*0.3,
+            pixels_per_meter=15.0,  # Conservative estimate
+            reference_distance=10.0,
+            confidence=0.3  # Low confidence for default
+        )
     
     def __len__(self):
         return len(self.samples)
