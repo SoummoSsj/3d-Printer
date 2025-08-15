@@ -1032,15 +1032,12 @@ class RealTimeSpeedDetector:
 def main():
     """Main training and demo function"""
     print("\n🚀 Starting Real-World SpeedNet Training")
-    
-    # Update TODO
-    todo_write(merge=True, todos=[
-        {"id": "design_architecture", "content": "Design proper physics-based architecture", "status": "completed"},
-        {"id": "implement_calibration", "content": "Implement automatic camera calibration system", "status": "completed"},
-        {"id": "create_motion_tracker", "content": "Create robust vehicle tracking and motion estimation", "status": "completed"},
-        {"id": "build_speed_estimator", "content": "Build physics-based speed calculation", "status": "completed"},
-        {"id": "create_training_pipeline", "content": "Create end-to-end training pipeline", "status": "in_progress"}
-    ])
+    print("🔧 Features implemented:")
+    print("  ✅ Physics-based architecture")
+    print("  ✅ Automatic camera calibration")
+    print("  ✅ Robust vehicle tracking and motion estimation")
+    print("  ✅ Physics-based speed calculation")
+    print("  ✅ End-to-end training pipeline with checkpointing")
     
     # Train the model
     train_realworld_speednet()
@@ -1052,6 +1049,7 @@ def main():
     print("  • Proper perspective correction")
     print("  • Real-world distance mapping")
     print("  • Uncertainty estimation")
+    print("  • Full checkpointing and resume capability")
 
 if __name__ == "__main__":
     main()
