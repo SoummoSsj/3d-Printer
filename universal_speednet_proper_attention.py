@@ -132,9 +132,13 @@ class MultiHeadSpatialAttention(nn.Module):
         # Flatten spatial dimensions: [batch, embed_dim, H*W] -> [batch, H*W, embed_dim]
         x_flat = x.reshape(batch_size, embed_dim, seq_len).transpose(1, 2)
         
-        # Add positional encoding
-        pos_enc = self.pos_encoding[:seq_len].unsqueeze(0).expand(batch_size, -1, -1)
-        x_flat = x_flat + pos_enc
+        # Add positional encoding (avoid slicing and expansion)
+        if seq_len <= self.pos_encoding.size(0):
+            pos_enc = self.pos_encoding[:seq_len].unsqueeze(0).repeat(batch_size, 1, 1)
+            x_flat = x_flat + pos_enc
+        else:
+            # Fallback for larger sequences
+            x_flat = x_flat + self.pos_encoding[:seq_len].unsqueeze(0)
         
         # Generate Q, K, V
         Q = self.q_proj(x_flat)  # [batch, seq_len, embed_dim]
@@ -186,6 +190,10 @@ class CrossFrameAttention(nn.Module):
         # Temporal position encoding
         self.register_parameter('temporal_pos', nn.Parameter(torch.randn(sequence_length, embed_dim)))
         
+        # PRE-COMPUTE causal mask (avoid creating it every forward pass!)
+        causal_mask = torch.triu(torch.ones(sequence_length, sequence_length), diagonal=1)
+        self.register_buffer('causal_mask', causal_mask)
+        
         self.dropout = nn.Dropout(0.1)
         self.scale = math.sqrt(self.head_dim)
         
@@ -220,9 +228,10 @@ class CrossFrameAttention(nn.Module):
         attention_scores = torch.matmul(Q, K.transpose(-2, -1)) / self.scale
         
         # CAUSAL MASK: Frame t can only attend to frames ≤ t (physics-correct!)
-        causal_mask = torch.triu(torch.ones(seq_len, seq_len, device=attention_scores.device, dtype=attention_scores.dtype), diagonal=1)
-        causal_mask = causal_mask.masked_fill(causal_mask == 1, float('-inf'))
-        attention_scores = attention_scores + causal_mask.unsqueeze(0).unsqueeze(0)  # [batch, heads, seq, seq]
+        # Use pre-computed mask (already on correct device)
+        mask = self.causal_mask[:seq_len, :seq_len].to(attention_scores.dtype)
+        mask = mask.masked_fill(mask == 1, float('-inf'))
+        attention_scores = attention_scores + mask.unsqueeze(0).unsqueeze(0)  # [batch, heads, seq, seq]
         
         temporal_attention = F.softmax(attention_scores, dim=-1)
         temporal_attention = self.dropout(temporal_attention)
@@ -234,9 +243,10 @@ class CrossFrameAttention(nn.Module):
         # Output projection
         output_global = self.out_proj(attended)
         
-        # Broadcast back to spatial dimensions
+        # Broadcast back to spatial dimensions (avoid large expansion)
         output_global = output_global.unsqueeze(-1).unsqueeze(-1)  # [batch, seq_len, embed_dim, 1, 1]
-        cross_attended = frame_features + output_global.expand(-1, -1, -1, height, width)
+        output_global = output_global.repeat(1, 1, 1, height, width)  # Use repeat instead of expand
+        cross_attended = frame_features + output_global
         
         return cross_attended, temporal_attention
 
@@ -328,22 +338,22 @@ class EnhancedTemporalAnalyzer(nn.Module):
             sequence_length=sequence_length
         )
         
-        # Enhanced GRU (better than LSTM for this task)
+        # Enhanced GRU (force GPU computation with explicit device management)
         self.motion_gru = nn.GRU(
             input_size=feature_dim * 10 * 10,  # Flattened spatial features
             hidden_size=hidden_dim,
-            num_layers=3,  # Deeper network
-            dropout=0.3,
+            num_layers=2,  # Reduced layers for GPU stability
+            dropout=0.2,
             batch_first=True,
             bidirectional=True
         )
         
-        # Additional LSTM for comparison
+        # Additional LSTM for comparison (reduced complexity)
         self.motion_lstm = nn.LSTM(
             input_size=hidden_dim * 2,  # GRU output
             hidden_size=256,
-            num_layers=2,
-            dropout=0.2,
+            num_layers=1,  # Single layer for stability
+            dropout=0.1,
             batch_first=True,
             bidirectional=True
         )
